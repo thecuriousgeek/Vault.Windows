@@ -6,7 +6,7 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build",
-      "program": "${workspaceFolder}/Windows/bin/Debug/net9.0-windows/Vault.dll",
+      "program": "${workspaceFolder}/bin/Debug/net9.0-windows/Vault.dll",
       "args": [],
       "cwd": "${workspaceFolder}",
       "console": "internalConsole",

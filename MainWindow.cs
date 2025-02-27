@@ -93,7 +93,7 @@ public class MainWindow : Form
   private static Icon GetIcon(string pName)
   {
     var _Assembly = Assembly.GetExecutingAssembly();
-    var _Name = $"{_Assembly.GetName().Name}.{pName}.ico";
+    var _Name = $"{_Assembly.GetName().Name}.Icons.{pName}.ico";
     using (Stream _Stream = _Assembly.GetManifestResourceStream(_Name))
       return new Icon(_Stream);
   }
