@@ -123,7 +123,7 @@ public class Vault
     if (!File.Exists(this.Folder + "/.vault")) return false;
     if (pPassword == null) return false;
     var _VaultHash = File.ReadAllText(this.Folder + "/.vault");
-    var _InputHash = Hash.Get(pPassword);
+    var _InputHash = new Crypt.AES(pPassword).Encrypt("vault");
     return _VaultHash.ToLower() == _InputHash.ToLower();
   }
   public void Mount(String pPassword)
@@ -323,7 +323,7 @@ public class Vault
       }
       //Vaults have a file .vault that contains the hash of the encrypted password, even if empty
       using (var _Signature = File.CreateText(_Dialog.SelectedPath + "/.vault"))
-        _Signature.Write(Hash.Get(_Password));
+        _Signature.Write(new Crypt.AES(_Password).Encrypt("vault"));
     }
     while (true)
     {
