@@ -36,6 +36,7 @@ static class Program
     //     BasicAuthentication = true;
     if (pArg.Length > 0) Vault.Root = pArg[0];
     else Vault.Root = Directory.GetCurrentDirectory();
+    Directory.SetCurrentDirectory(Vault.Root);
     ApplicationConfiguration.Initialize();
     LogWindow = new MainWindow();
     // var _Vault = new Vault("Test","Z:/");
