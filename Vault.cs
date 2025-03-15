@@ -124,7 +124,7 @@ public class Vault
     if (!File.Exists(this.Folder + "/.vault")) return false;
     if (pPassword == null) return false;
     var _VaultHash = File.ReadAllText(this.Folder + "/.vault");
-    var _InputHash = new Crypt.AES(pPassword).Encrypt("vault");
+    var _InputHash = string.IsNullOrEmpty(pPassword) ? "vault" : new Crypt.AES(pPassword).Encrypt("vault");
     return _VaultHash.ToLower() == _InputHash.ToLower();
   }
   public void Mount(String pPassword)
@@ -270,13 +270,13 @@ public class Vault
   #region static helpers
   public static void Load()
   {
-    var _IniFile = new IniFile(Vault.Root+"/vault.ini");
+    var _IniFile = new IniFile(Vault.Root + "/vault.ini");
     foreach (var n in _IniFile.GetKeys("Vault"))
       new Vault(n, _IniFile.Get("Vault", n));
     if (Instances.Count == 0)
     {
       if (MessageBox.Show(@"No vaults are defined", "Create new vault", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.No)
-        Application.Exit();
+        return;
       Create();
     }
     foreach (var _Vault in Instances)
@@ -289,7 +289,7 @@ public class Vault
   }
   public static void Save()
   {
-    var _IniFile = new IniFile(Vault.Root+"/vault.ini");
+    var _IniFile = new IniFile(Vault.Root + "/vault.ini");
     foreach (var _Vault in Instances)
       _IniFile.Add("Vault", _Vault.Name, _Vault.Folder);
     _IniFile.Save();
@@ -320,11 +320,14 @@ public class Vault
       if (String.IsNullOrEmpty(_Password))
       {
         MessageBox.Show("Empty password, this vault will be unencrypted", "Unencrypted Vault", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return;
+        using (var _Signature = File.CreateText(_Dialog.SelectedPath + "/.vault"))
+          _Signature.Write("vault");
       }
-      //Vaults have a file .vault that contains the hash of the encrypted password, even if empty
-      using (var _Signature = File.CreateText(_Dialog.SelectedPath + "/.vault"))
-        _Signature.Write(new Crypt.AES(_Password).Encrypt("vault"));
+      else
+      {
+        using (var _Signature = File.CreateText(_Dialog.SelectedPath + "/.vault"))
+          _Signature.Write(new Crypt.AES(_Password).Encrypt("vault"));
+      }
     }
     while (true)
     {

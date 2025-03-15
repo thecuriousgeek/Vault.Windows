@@ -7,7 +7,7 @@
       "request": "launch",
       "preLaunchTask": "build",
       "program": "${workspaceFolder}/bin/Debug/net9.0-windows/Vault.dll",
-      "args": ["Z:/"],
+      "args": ["d:/"],
       "console": "internalConsole",
       "stopAtEntry": false,
       "logging": {
