@@ -97,6 +97,7 @@ public class Vault
   #endregion
 
   public static List<Vault> Instances = new();
+  public static String Root = null;
   public static Vault Get(string pName) { return Instances.FirstOrDefault(x => x.Name == pName); }
   private Crypt.AbstractCrypt CryptoName, CryptoData;
   public string Name;
@@ -269,7 +270,7 @@ public class Vault
   #region static helpers
   public static void Load()
   {
-    var _IniFile = new IniFile("Vault.ini");
+    var _IniFile = new IniFile(Vault.Root+"/vault.ini");
     foreach (var n in _IniFile.GetKeys("Vault"))
       new Vault(n, _IniFile.Get("Vault", n));
     if (Instances.Count == 0)
@@ -288,7 +289,7 @@ public class Vault
   }
   public static void Save()
   {
-    var _IniFile = new IniFile("Vault.ini");
+    var _IniFile = new IniFile(Vault.Root+"/vault.ini");
     foreach (var _Vault in Instances)
       _IniFile.Add("Vault", _Vault.Name, _Vault.Folder);
     _IniFile.Save();

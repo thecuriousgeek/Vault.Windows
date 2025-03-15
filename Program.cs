@@ -26,7 +26,7 @@ static class Program
     }
   }
   [STAThread]
-  static void Main()
+  static void Main(String[] pArg)
   {
     // Crypt.Test();
     // Environment.Exit(0);
@@ -34,6 +34,8 @@ static class Program
     // using (RegistryKey _Key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\\Services\\WebClient\\Parameters"))
     //   if (_Key != null && (int)_Key.GetValue("BasicAuthLevel") == 2)
     //     BasicAuthentication = true;
+    if (pArg.Length > 0) Vault.Root = pArg[0];
+    else Vault.Root = Directory.GetCurrentDirectory();
     ApplicationConfiguration.Initialize();
     LogWindow = new MainWindow();
     // var _Vault = new Vault("Test","Z:/");
@@ -48,7 +50,7 @@ static class Program
   }
   private static void Watcher()
   {
-    var _IniFile = new IniFile("Vault.ini");
+    var _IniFile = new IniFile(Vault.Root+"/vault.ini");
     var s = _IniFile.Get("Setting", "Timeout");
     var _Timeout = string.IsNullOrEmpty(s) ? 600 : int.Parse(s);
     while (true)
