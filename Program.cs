@@ -1,5 +1,4 @@
 namespace TheCuriousGeek.Vault;
-// using Microsoft.Win32;
 
 static class Program
 {
@@ -28,24 +27,34 @@ static class Program
   [STAThread]
   static void Main(String[] pArg)
   {
-    // Crypt.Test();
-    // Environment.Exit(0);
     //if basic authentication is permitted, use that instead for prompting for mount password
     // using (RegistryKey _Key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\\Services\\WebClient\\Parameters"))
     //   if (_Key != null && (int)_Key.GetValue("BasicAuthLevel") == 2)
     //     BasicAuthentication = true;
-    if (pArg.Length > 0) Vault.Root = pArg[0];
-    else Vault.Root = Directory.GetCurrentDirectory();
+    if (pArg.Length > 0) Vault.Root = pArg[0].Replace('\\','/');
+    else Vault.Root = Directory.GetCurrentDirectory().Replace('\\','/');
     Directory.SetCurrentDirectory(Vault.Root);
     ApplicationConfiguration.Initialize();
     LogWindow = new MainWindow();
-    // var _Vault = new Vault("Test","Z:/");
-    // var p = "Tat Twam Asi";
-    // _Vault.CryptoName = string.IsNullOrEmpty(p) ? null : new Crypt.DES(p);
-    // _Vault.CryptoData = string.IsNullOrEmpty(p) ? null : new Crypt.AES(p);
     LogWindow.Show();
     WebDav.Start();
     Vault.Load();
+    foreach (var _Vault in Vault.Instances)
+    {
+      if (MessageBox.Show("Do you want to open this vault", _Vault.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) continue;
+      String _Password = WinUtil.InputDialog($"Enter the password for {_Vault.Name}");
+      if (_Password == null) break;
+      if (!_Vault.Validate(_Password))
+      {
+        MessageBox.Show("Invalid password", _Vault.Name, MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+        continue;
+      }
+      if (_Vault.Mount(_Password))
+        MessageBox.Show($"Mounted as {_Vault.Drive}", $"Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+      else
+        MessageBox.Show($"Could not mount vault", $"Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+    LogWindow.UpdateMenu();
     Task.Run(() => Watcher());
     Application.Run();
   }
@@ -60,9 +69,9 @@ static class Program
       var _Now = DateTime.Now;
       foreach (var _Vault in Vault.Instances)
       {
-        if (_Vault.Mounted && (_Now - _Vault.LastUse).TotalSeconds > _Timeout)
+        if (!string.IsNullOrEmpty(_Vault.Drive) && (_Now - _Vault.LastUse).TotalSeconds > _Timeout)
         {
-          Log("Watcher", $"Vault {_Vault.Name} has not been accessed for {_Timeout} seconds. Unmounting");
+          _Vault.Log("Vault has not been accessed for {_Timeout} seconds. Unmounting");
           _Vault.Unmount();
         }
       }
