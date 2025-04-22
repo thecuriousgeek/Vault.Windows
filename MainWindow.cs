@@ -1,15 +1,18 @@
 namespace TheCuriousGeek.Vault;
+using System.Windows.Forms;
 using System.Reflection;
 using System.Drawing;
 using System.IO;
 
 public class MainWindow : Form
 {
+  public static MainWindow Instance = null;
   public DataGridView LogView = new DataGridView();
   private NotifyIcon TrayIcon;
   private ContextMenuStrip Menu = new ContextMenuStrip();
   public MainWindow()
   {
+    MainWindow.Instance = this;
     this.Icon = GetIcon("vault");
     this.Text = "Vault - Logs";
     this.WindowState = FormWindowState.Maximized;
@@ -27,23 +30,6 @@ public class MainWindow : Form
     this.TrayIcon.DoubleClick += new EventHandler(this.OnTrayDoubleClick);
   }
 
-  public void UpdateMenu()
-  {
-    this.Menu.Items.Clear();
-    foreach (var v in Vault.Instances)
-    {
-      ToolStripItem _Item = new ToolStripButton(v.Name);
-      _Item.Tag = v;
-      _Item.Image = GetIcon(v.Mounted ? "mounted" : "unmounted").ToBitmap();
-      _Item.Click += v.Mounted ? this.OnUnmount : this.OnMount;
-      this.Menu.Items.Add(_Item);
-    }
-    this.Menu.Items.Add(new ToolStripSeparator());
-    this.Menu.Items.Add("New", null, this.OnNew);
-    this.Menu.Items.Add("Open", null, this.OnOpen);
-    this.Menu.Items.Add(new ToolStripSeparator());
-    this.Menu.Items.Add("Exit", null, this.OnExit);
-  }
   private void OnTrayDoubleClick(object sender, EventArgs args)
   {
     this.Show();
@@ -51,77 +37,65 @@ public class MainWindow : Form
   }
   public void OnMount(object sender, EventArgs args)
   {
-    var _Vault = ((ToolStripItem)sender).Tag as Vault;
-    var _Password = WinUtil.InputDialog("Enter the password for this vault");
+    var _Name = (sender is string) ? sender as string : ((ToolStripItem)sender).Tag as string;
+    var _Config = Config.Instances.FirstOrDefault(v => v.Name == _Name);
+    if (_Config == null)
+    {
+      MessageBox.Show($"No such vault", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return;
+    }
+    var _Password = WinUtil.InputDialog($"Enter the password for {_Name}");
     if (_Password == null) return;
-    Mount(_Vault, _Password);
-    this.UpdateMenu();
-  }
-  private void Mount(Vault pVault, String pPassword)
-  {
-    if (pVault.Mount(pPassword))
-      MessageBox.Show($"Mounted as {pVault.Drive}", $"Vault {pVault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    var _Vault = _Config.Open(_Password);
+    if (_Vault == null)
+    {
+      MessageBox.Show($"Invalid password", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return;
+    }
+    if (_Vault.Mount())
+      MessageBox.Show($"Mounted as {_Vault.Drive}", $"Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
     else
-      MessageBox.Show($"Could not mount vault", $"Vault {pVault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      MessageBox.Show($"Could not mount vault", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    MainWindow.UpdateMenu();
   }
-  private void OnUnmount(object sender, EventArgs args)
+  public void OnUnmount(object sender, EventArgs args)
   {
-    var _Vault = ((ToolStripItem)sender).Tag as Vault;
+    var _Name = (sender is string) ? sender as string : ((ToolStripItem)sender).Tag as string;
+    var _Vault = WebDav.Vaults.FirstOrDefault(v => v.Name == _Name);
+    if (_Vault == null)
+    {
+      MessageBox.Show($"No such vault", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return;
+    }
     if (_Vault.Unmount())
-      MessageBox.Show($"Unmounted", $"Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+      MessageBox.Show($"Unmounted", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Information);
     else
-      MessageBox.Show($"Could not unmount vault", $"Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
-    this.UpdateMenu();
+      MessageBox.Show($"Could not unmount vault", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    MainWindow.UpdateMenu();
   }
   private void OnNew(object sender, EventArgs args)
   {
-    var _Dialog = new FolderBrowserDialog();
-    _Dialog.Description = "Select the folder to hold this vault";
-    if (_Dialog.ShowDialog() != DialogResult.OK) return;
-    var _Location = _Dialog.SelectedPath;
-    Program.Log("NewVault", "Selected " + _Location);
-    if (File.Exists(_Location + "/.vault"))
+    var _Name = WinUtil.InputDialog("The name for this Vault");
+    if (string.IsNullOrEmpty(_Name)) return;
+    if (File.Exists(_Name + "/.vault"))
     {
       MessageBox.Show("Folder already has a vault", "New Vault", MessageBoxButtons.OK, MessageBoxIcon.Error);
       return;
     }
-    var _Name = WinUtil.InputDialog("The name for this Vault");
-    if (string.IsNullOrEmpty(_Name)) return;
-    var _Password = WinUtil.InputDialog("Enter the password for this vault");
+    if (Directory.Exists(_Name))
+    {
+      MessageBox.Show("Folder already exists", "New Vault", MessageBoxButtons.OK, MessageBoxIcon.Error);
+      return;
+    }
+    var _Password = WinUtil.InputDialog("Enter the password for this vault (blank for unencrypted vault)");
     if (_Password == null) return;
     if (String.IsNullOrEmpty(_Password))
     {
       MessageBox.Show("Empty password, this vault will be unencrypted", "New Vault", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
-    var _Vault = Vault.Create(_Name, _Password, Path.Combine(_Location,_Name));
-    Mount(_Vault, _Password);
-    this.UpdateMenu();
-  }
-  private void OnOpen(object sender, EventArgs args)
-  {
-    var _Dialog = new FolderBrowserDialog();
-    _Dialog.Description = "Select the folder containing the vault";
-    if (_Dialog.ShowDialog() != DialogResult.OK) return;
-    var _Location = _Dialog.SelectedPath;
-    Program.Log("OpenVault", "Selected " + _Location);
-    if (!File.Exists(_Dialog.SelectedPath + "/.vault"))
-    {
-      MessageBox.Show("Folder does not contain a vault", "Open Vault", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-      return;
-    }
-    var _Name = WinUtil.InputDialog("The name for this Vault",Path.GetFileName(_Location));
-    if (string.IsNullOrEmpty(_Name)) return;
-    var _Password = WinUtil.InputDialog("Enter the password for this vault");
-    var _Vault = new Vault(_Name, _Location);
-    if (!_Vault.Validate(_Password))
-    {
-      MessageBox.Show($"Invalid password", $"Open Vault {_Vault.Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
-      return;
-    }
-    Vault.Instances.Add(_Vault);
-    Vault.Save();
-    Mount(_Vault, _Password);
-    this.UpdateMenu();
+    if (!Config.Create(_Name, _Password)) return;
+    MainWindow.UpdateMenu();
+    MessageBox.Show("Created", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Warning);
   }
   protected override void OnResize(EventArgs e)
   {
@@ -139,16 +113,14 @@ public class MainWindow : Form
   }
   public void OnExit(object sender, EventArgs e)
   {
-    foreach (var _Vault in Vault.Instances)
+    var _Vaults = WebDav.Vaults.Where(v => true).ToList(); //Clone since Id be modifying the list
+    foreach (var _Vault in _Vaults)
     {
-      if (_Vault.Mounted)
-      {
-        var _Answer = MessageBox.Show($"Vault {_Vault.Name} is mounted as {_Vault.Drive}. Unmount and exit", "Vault Warning", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-        if (_Answer == DialogResult.Cancel) return;
-        if (_Answer == DialogResult.Yes) _Vault.Unmount();
-      }
+      var _Answer = MessageBox.Show($"Vault {_Vault.Name} is mounted as {_Vault.Drive}. Unmount and exit", "Vault Warning", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+      if (_Answer == DialogResult.Cancel) return;
+      if (_Answer == DialogResult.Yes) this.OnUnmount(_Vault.Name, null);
     }
-    if (Vault.Instances.All(x => !x.Mounted)) Environment.Exit(0);
+    if (WebDav.Vaults.Count==0) Environment.Exit(0);
   }
   private static Icon GetIcon(string pName)
   {
@@ -156,5 +128,48 @@ public class MainWindow : Form
     var _Name = $"{_Assembly.GetName().Name}.Icons.{pName}.ico";
     using (Stream _Stream = _Assembly.GetManifestResourceStream(_Name))
       return new Icon(_Stream);
+  }
+  public static void UpdateMenu()
+  {
+    if (Instance.InvokeRequired)
+    {
+      Instance.Invoke(new System.Windows.Forms.MethodInvoker(delegate { MainWindow.UpdateMenu(); }));
+      return;
+    }
+    Instance.Menu.Items.Clear();
+    foreach (var _Config in Config.Instances)
+    {
+      ToolStripItem _Item = new ToolStripButton(_Config.Name);
+      _Item.Tag = _Config.Name;
+      var _Mounted = WebDav.Vaults.Any(x => x.Name == _Config.Name);
+      _Item.Image = GetIcon(_Mounted ? "mounted" : "unmounted").ToBitmap();
+      _Item.Click += _Mounted ? Instance.OnUnmount : Instance.OnMount;
+      Instance.Menu.Items.Add(_Item);
+    }
+    Instance.Menu.Items.Add(new ToolStripSeparator());
+    Instance.Menu.Items.Add("New", null, Instance.OnNew);
+    Instance.Menu.Items.Add(new ToolStripSeparator());
+    Instance.Menu.Items.Add("Exit", null, Instance.OnExit);
+  }
+  public static void Log(String pID, string pMessage)
+  {
+    if (Instance.InvokeRequired)
+    {
+      Instance.BeginInvoke(new System.Windows.Forms.MethodInvoker(delegate { MainWindow.Log(pID, pMessage); }));
+      return;
+    }
+    System.Console.WriteLine($"{pID}: {pMessage}");
+    Instance.LogView.Rows.Add(DateTime.Now, pID, pMessage);
+    var MAX_ROWS = 1000; var MIN_ROWS = 500;
+    if (Instance.LogView.Rows.Count > MAX_ROWS)
+    {
+      Instance.SuspendLayout();
+      var _Limit = Instance.LogView.Rows.Count - MIN_ROWS;
+      while (Instance.LogView.Rows.Count > MIN_ROWS)
+        Instance.LogView.Rows.RemoveAt(0);
+      Instance.ResumeLayout();
+      Instance.Refresh();
+    }
+    Instance.LogView.FirstDisplayedScrollingRowIndex = Instance.LogView.Rows.Count - 1;
   }
 }

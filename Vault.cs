@@ -1,6 +1,51 @@
 namespace TheCuriousGeek.Vault;
 using System.Runtime.InteropServices;
 
+public class Config
+{
+  public static List<Config> Instances = new List<Config>();
+  private static String Sign(String pPassword) { return (string.IsNullOrEmpty(pPassword)) ? "vault" : new Crypt.AES(pPassword).Encrypt("vault"); }
+
+  public static void Load()
+  {
+    foreach (var _Folder in Directory.GetDirectories(Environment.CurrentDirectory))
+      if (File.Exists(_Folder + "/.vault"))
+      {
+        var _Vault = new Config(Path.GetFileName(_Folder));
+        Config.Instances.Add(_Vault);
+      }
+  }
+  public static bool Create(String pName, string pPassword)
+  {
+    if (Directory.Exists(pName)) return false;
+    Directory.CreateDirectory(pName);
+    var _Signature = Config.Sign(pPassword);
+    File.WriteAllText(pName + "/.vault", _Signature);
+    var _Vault = new Config(pName);
+    Config.Instances.Add(_Vault);
+    return true;
+  }
+  public static Config Get(String pName)
+  {
+    var _Vault = Config.Instances.FirstOrDefault(v => v.Name == pName);
+    return _Vault;
+  }
+  public Vault Open(String pPassword)
+  {
+    if (this.Signature.ToLower() != Sign(pPassword).ToLower()) return null;
+    var _Vault = new Vault(this.Name, pPassword);
+    return _Vault;
+  }
+
+  public string Name;
+  public string Signature;
+  public Config(string pName)
+  {
+    this.Name = pName;
+    this.Signature = File.ReadAllText(pName + "/.vault");
+  }
+}
+
 public class Vault
 {
   #region Win32 Mounting
@@ -95,218 +140,170 @@ public class Vault
     return result;
   }
   #endregion
-
-  public static List<Vault> Instances = new();
-  public static String Root = null;
-  public static Vault Get(string pName) { return Instances.FirstOrDefault(x => x.Name == pName); }
-  private Crypt.AbstractCrypt CryptoName, CryptoData;
-  public string Name;
-  public string Folder;
-  public string Drive;
-  public DateTime LastUse;
-  #region static helpers
-  private static String Signature(String pPassword)
-  {
-    if (string.IsNullOrEmpty(pPassword)) return "vault";
-    return new Crypt.AES(pPassword).Encrypt("vault");
-  }
-  public static void Load()
-  {
-    var _IniFile = new IniFile(Vault.Root + "/vault.ini");
-    foreach (var n in _IniFile.GetKeys("Vault"))
-    {
-      var _Vault = new Vault(n, _IniFile.Get("Vault", n));
-      Instances.Add(_Vault);
-    }
-  }
-  public static void Save()
-  {
-    var _IniFile = new IniFile(Vault.Root + "/vault.ini");
-    foreach (var _Vault in Instances)
-      _IniFile.Add("Vault", _Vault.Name, _Vault.Folder);
-    _IniFile.Save();
-  }
-  public static Vault Create(String pName, string pPassword, string pLocation)
-  {
-    Directory.CreateDirectory(pLocation);
-    using (var _File = File.CreateText(pLocation + "/.vault"))
-      _File.Write(Signature(pPassword));
-    var _Vault = new Vault(pName, pLocation);
-    _Vault.Log("Created");
-    Instances.Add(_Vault);
-    Save();
-    return _Vault;
-  }
-  #endregion
-  public void Log(string pWhat) { Program.Log(this.Name, pWhat); }
-  public Vault(string pName, string pFolder)
-  {
-    this.Name = pName;
-    pFolder = pFolder.Replace('\\', '/');
-    if (pFolder.StartsWith(Vault.Root, StringComparison.OrdinalIgnoreCase))
-      this.Folder = pFolder.Substring(Vault.Root.Length);
-    else
-      this.Folder = pFolder;
-    this.LastUse = DateTime.MinValue;
-    if (!File.Exists(pFolder + "/.vault"))
-    {
-      this.Log($"No vault in {this.Folder}");
-      throw new InvalidOperationException($"No vault in {this.Folder}");
-    }
-    this.Log("Configured");
-  }
-  public bool Validate(string pPassword)
-  {
-    if (!File.Exists(this.Folder + "/.vault")) return false;
-    if (pPassword == null) return false;
-    var _Signature = File.ReadAllText(this.Folder + "/.vault");
-    return _Signature.ToLower() == Signature(pPassword);
-  }
-  public bool Mounted
-  {
-    get {return !string.IsNullOrEmpty(this.Drive);}
-  }
   #region Mount/Unmount
-  public bool Mount(String pPassword)
-{
-  if (!this.Validate(pPassword))
+  public bool Mount()
   {
-    this.Log("Mount:Invalid password");
+    if (this.Drive != null) return true;
+    for (var i = 0; i < 20; i++)
+    {
+      if (!Directory.Exists((char)('A' + i) + ":"))
+      {
+        this.Drive = (char)('A' + i) + ":";
+        break;
+      }
+    }
+    if (string.IsNullOrEmpty(this.Drive))
+    {
+      this.Log($"No drives available to mount");
+      return false;
+    }
+    var _URL = WebDav.GetURL(this.Name);
+    WebDav.Add(this);
+    int _Status = MapNetworkDrive(_URL, this.Drive, null, null);
+    if (_Status == 0)
+    {
+      this.Log($"{_URL} mapped to drive {this.Drive}");
+      return true;
+    }
+    string _Error = new System.ComponentModel.Win32Exception(_Status).Message;
+    this.Log($"Failed to map {_URL} to drive {this.Drive} - {_Error}");
+    WebDav.Remove(this);
     return false;
   }
-  this.CryptoName = string.IsNullOrEmpty(pPassword) ? null : new Crypt.DES(pPassword);
-  this.CryptoData = string.IsNullOrEmpty(pPassword) ? null : new Crypt.AES(pPassword);
-  for (var i = 0; i < 20; i++)
+  public bool Unmount()
   {
-    if (!Directory.Exists((char)('A' + i) + ":"))
+    if (string.IsNullOrEmpty(this.Drive)) throw new Exception("Vault is not mounted");
+    int _Status = UnmapNetworkDrive(this.Drive);
+    if (_Status == 0)
     {
-      this.Drive = (char)('A' + i) + "";
-      break;
+      this.Log($"Unmapped {this.Drive}");
+      WebDav.Remove(this);
+      this.Drive = null;
+      return true;
+    }
+    string _Error = new System.ComponentModel.Win32Exception(_Status).Message;
+    this.Log($"Failed to unmap {this.Drive} - {_Error}");
+    return false;
+  }
+  #endregion
+  public void Log(string pWhat) { MainWindow.Log(this.Name, pWhat); }
+
+  public string Name;
+  private Crypt.AbstractCrypt CryptoName, CryptoData;
+  public string Drive;
+  public DateTime LastUse;
+  public Vault(String pName,String pPassword)
+  {    
+    this.Name = pName;
+    this.LastUse = DateTime.MinValue;
+    this.CryptoName = string.IsNullOrEmpty(pPassword) ? null : new Crypt.DES(pPassword);
+    this.CryptoData = string.IsNullOrEmpty(pPassword) ? null : new Crypt.AES(pPassword);
+    return;
+  }
+
+  #region Helpers
+  private string Folder
+  {
+    get { return $"{Directory.GetCurrentDirectory()}/{this.Name}".Replace('\\', '/'); }
+  }
+  private string EncryptPath(string pPath)
+  {
+    if (this.CryptoName == null) return pPath;
+    var _Result = new List<string>();
+    foreach (var p in pPath.Replace('\\', '/').Split('/'))
+      if (!String.IsNullOrEmpty(p)) _Result.Add(this.CryptoName.Encrypt(p));
+    return "/" + string.Join('/', _Result);
+  }
+  private string DecryptPath(string pPath)
+  {
+    if (this.CryptoName == null) return pPath;
+    var _Result = new List<string>();
+    foreach (var p in pPath.Replace('\\', '/').Split('/'))
+      if (!String.IsNullOrEmpty(p)) _Result.Add(this.CryptoName.Decrypt(p));
+    return "/" + string.Join('/', _Result);
+  }
+  public string GetFileName(string pPath)
+  {
+    return $"{this.Folder}{this.EncryptPath(pPath)}".Replace('\\', '/');
+  }
+  public string GetPath(string pFileName)
+  {
+    return this.DecryptPath(pFileName.Replace('\\', '/').Replace(this.Folder, ""));
+  }
+  public bool IsHidden(string pPath)
+  {
+    return pPath == "/.vault";
+  }
+  public bool Exists(string pPath)
+  {
+    var _FileName = this.GetFileName(pPath);
+    return Path.Exists(_FileName);
+  }
+  public IEnumerable<String> ScanDir(String pPath)
+  {
+    var _Folder = this.GetFileName(pPath);
+    foreach (var _File in Directory.GetFileSystemEntries(_Folder))
+    {
+      if (!_File.EndsWith(".vault"))
+      {
+        var v = this.GetPath(_File);
+        yield return v;
+      }
     }
   }
-  var _Drive = Drive + ":";
-  var _URL = WebDav.GetURL(this.Name);
-  int _Status = MapNetworkDrive(_URL, _Drive, null, null);
-  if (_Status == 0)
+  #endregion
+  #region Operations
+  public async Task CopyFrom(string pPath, Stream pDecrypted)
   {
-    this.Drive = _Drive;
-    this.Log($"{_URL} mapped to drive {this.Drive}");
+    var _FileName = this.GetFileName(pPath);
+    using (var _File = new FileStream(_FileName, FileMode.Open))
+      if (this.CryptoData == null)
+        await _File.CopyToAsync(pDecrypted);
+      else
+        await this.CryptoData.Decrypt(_File, pDecrypted);
+  }
+  public async Task CopyTo(Stream pDecrypted, string pPath)
+  {
+    var _FileName = this.GetFileName(pPath);
+    if (!File.Exists(_FileName)) File.Create(_FileName).Close();
+    using (var _File = new FileStream(_FileName, FileMode.Truncate))
+      if (this.CryptoData == null)
+        await pDecrypted.CopyToAsync(_File);
+      else
+        await this.CryptoData.Encrypt(pDecrypted, _File);
+  }
+  public void Delete(string pPath)
+  {
+    var _FileName = this.GetFileName(pPath);
+    if (new FileInfo(_FileName).Attributes.HasFlag(FileAttributes.Archive))
+      File.Delete(_FileName);
+    else
+      Directory.Delete(_FileName);
+  }
+  public bool Move(string pFrom, string pTo)
+  {
+    var _Source = this.GetFileName(pFrom);
+    var _Target = this.GetFileName(pTo);
+    if (!Path.Exists(_Source) || Path.Exists(_Target)) return false;
+    if (new FileInfo(_Source).Attributes.HasFlag(FileAttributes.Archive))
+      File.Move(_Source, _Target);
+    else
+      Directory.Move(_Source, _Target);
     return true;
   }
-  string _Error = new System.ComponentModel.Win32Exception(_Status).Message;
-  this.Log($"Failed to map {_URL} to drive {_Drive} - {_Error}");
-  return false;
-}
-public bool Unmount()
-{
-  var _Drive = this.Drive;
-  int _Status = UnmapNetworkDrive(_Drive);
-  if (_Status == 0)
+  public bool CreateDirectory(string pPath)
   {
-    this.Log($"Unmapped {this.Drive}");
-    this.Drive = null;
-    this.CryptoName = null;
-    this.CryptoData = null;
+    var _FileName = this.GetFileName(pPath);
+    if (Path.Exists(_FileName)) return false;
+    Directory.CreateDirectory(_FileName);
     return true;
   }
-  string _Error = new System.ComponentModel.Win32Exception(_Status).Message;
-  this.Log($"Failed to unmap {_Drive} - {_Error}");
-  return false;
-}
-#endregion
-#region Helpers
-private string EncryptPath(string pPath)
-{
-  if (this.CryptoName == null) return pPath;
-  var _Result = new List<string>();
-  foreach (var p in pPath.Replace('\\', '/').Split('/'))
-    if (!String.IsNullOrEmpty(p)) _Result.Add(this.CryptoName.Encrypt(p));
-  return "/" + string.Join('/', _Result);
-}
-private string DecryptPath(string pPath)
-{
-  if (this.CryptoName == null) return pPath;
-  var _Result = new List<string>();
-  foreach (var p in pPath.Replace('\\', '/').Split('/'))
-    if (!String.IsNullOrEmpty(p)) _Result.Add(this.CryptoName.Decrypt(p));
-  return "/" + string.Join('/', _Result);
-}
-public string GetFileName(string pPath)
-{
-  return (this.Folder + this.EncryptPath(pPath)).Replace('\\', '/');
-}
-public string GetPath(string pFileName)
-{
-  return this.DecryptPath(pFileName.Substring(this.Folder.Length).Replace('\\', '/'));
-}
-public bool IsHidden(string pPath)
-{
-  return pPath == "/.vault";
-}
-public bool Exists(string pPath)
-{
-  var _FileName = this.GetFileName(pPath);
-  return Path.Exists(_FileName);
-}
-public IEnumerable<String> ScanDir(String pPath)
-{
-  var _Folder = this.GetFileName(pPath);
-  foreach (var _File in Directory.GetFileSystemEntries(_Folder))
-    if (!_File.Replace('\\', '/').EndsWith("/.vault")) yield return this.GetPath(_File);
-}
-#endregion
-#region Operations
-public async Task CopyFrom(string pPath, Stream pDecrypted)
-{
-  var _FileName = this.GetFileName(pPath);
-  using (var _File = new FileStream(_FileName, FileMode.Open))
-    if (this.CryptoData == null)
-      await _File.CopyToAsync(pDecrypted);
-    else
-      await this.CryptoData.Decrypt(_File, pDecrypted);
-}
-public async Task CopyTo(Stream pDecrypted, string pPath)
-{
-  var _FileName = this.GetFileName(pPath);
-  if (!File.Exists(_FileName)) File.Create(_FileName).Close();
-  using (var _File = new FileStream(_FileName, FileMode.Truncate))
-    if (this.CryptoData == null)
-      await pDecrypted.CopyToAsync(_File);
-    else
-      await this.CryptoData.Encrypt(pDecrypted, _File);
-}
-public void Delete(string pPath)
-{
-  var _FileName = this.GetFileName(pPath);
-  if (new FileInfo(_FileName).Attributes.HasFlag(FileAttributes.Archive))
-    File.Delete(_FileName);
-  else
-    Directory.Delete(_FileName);
-}
-public bool Move(string pFrom, string pTo)
-{
-  var _Source = this.GetFileName(pFrom);
-  var _Target = this.GetFileName(pTo);
-  if (!Path.Exists(_Source) || Path.Exists(_Target)) return false;
-  if (new FileInfo(_Source).Attributes.HasFlag(FileAttributes.Archive))
-    File.Move(_Source, _Target);
-  else
-    Directory.Move(_Source, _Target);
-  return true;
-}
-public bool CreateDirectory(string pPath)
-{
-  var _FileName = this.GetFileName(pPath);
-  if (Path.Exists(_FileName)) return false;
-  Directory.CreateDirectory(_FileName);
-  return true;
-}
-public void Update(String pPath, String pCreated = null, String pModified = null, String pAccessed = null)
-{
-  var _Info = new FileInfo(this.GetFileName(pPath));
-  if (!String.IsNullOrEmpty(pCreated)) _Info.CreationTime = DateTime.Parse(pCreated);
-  if (!String.IsNullOrEmpty(pModified)) _Info.LastWriteTime = DateTime.Parse(pModified);
-  if (!String.IsNullOrEmpty(pAccessed)) _Info.LastAccessTime = DateTime.Parse(pAccessed);
-}
+  public void Update(String pPath, String pCreated = null, String pModified = null, String pAccessed = null)
+  {
+    var _Info = new FileInfo(this.GetFileName(pPath));
+    if (!String.IsNullOrEmpty(pCreated)) _Info.CreationTime = DateTime.Parse(pCreated);
+    if (!String.IsNullOrEmpty(pModified)) _Info.LastWriteTime = DateTime.Parse(pModified);
+    if (!String.IsNullOrEmpty(pAccessed)) _Info.LastAccessTime = DateTime.Parse(pAccessed);
+  }
   #endregion
 }

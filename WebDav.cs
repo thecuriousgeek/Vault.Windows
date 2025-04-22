@@ -11,59 +11,12 @@ using System.Diagnostics;
 
 public class WebDav
 {
+  public static List<Vault> Vaults = new List<Vault>();
+  public static void Add(Vault pVault) { Vaults.Add(pVault); }
+  public static void Remove(Vault pVault) { Vaults.Remove(pVault); }
   private static string SanitizeXml(String pWhat)
   {
     return pWhat.Replace("&", "&amp;").Replace("<", "&lt;");
-  }
-  protected class DavContext
-  {
-    private HttpContext Context;
-    private string Verb;
-    public Vault Vault;
-    public string Path;
-    private Stopwatch Timer;
-    public DavContext(HttpContext pContext)
-    {
-      this.Timer = new Stopwatch();
-      this.Timer.Start();
-      this.Context = pContext;
-      this.Verb = this.Context.Request.Method;
-      var _Args = this.Context.Request.Path.Value.TrimStart('/').Split(new char[] { '/' }, 2);
-      this.Vault = Vault.Get(_Args.Length > 0 ? _Args[0] : null);
-      if (this.Vault == null) return;
-      this.Vault.LastUse = DateTime.Now;
-      this.Path = _Args.Length > 1 ? "/" + _Args[1] : "/";
-    }
-    public bool Valid
-    {
-      get
-      {
-        if (this.Vault != null) return true;
-        this.NotFound();
-        return false;
-      }
-    }
-    public bool Exists
-    {
-      get
-      {
-        if (this.Valid && this.Vault.Exists(this.Path)) return true;
-        this.NotFound();
-        return false;
-      }
-    }
-    public void Done()
-    {
-      this.Timer.Stop();
-      var _Name = this.Vault == null ? this.Context.Request.Path.Value : this.Vault.Name;
-      Program.Log(_Name, $"{this.Verb} {this.Path} - {this.Context.Response.StatusCode} in {this.Timer.Elapsed.TotalMicroseconds}ms");
-    }
-    public void NotFound()
-    {
-      this.Context.Response.StatusCode = 404;
-      this.Context.Response.WriteAsync("Not Found");
-      this.Done();
-    }
   }
   #region Helpers
   private static WebDav Instance = new WebDav();
@@ -71,7 +24,7 @@ public class WebDav
   public static void Start()
   {
     Instance.Server.Start();
-    Program.Log("WebDAV", "Listening at " + Instance.URL);
+    MainWindow.Log("WebDAV", "Listening at " + Instance.URL);
   }
   private static string GetRegexMatch(string pWhat, string pPattern)
   {
@@ -91,6 +44,27 @@ public class WebDav
     _Builder.WebHost.ConfigureKestrel((ctx, opt) => { opt.Listen(IPAddress.Loopback, 5000); opt.Limits.MaxRequestBodySize = long.MaxValue; });
     _Builder.Logging.ClearProviders();
     this.Server = _Builder.Build();
+    this.Server.Use(async (ctx, next) =>
+    {
+      var _Timer = new Stopwatch();
+      _Timer.Start();
+      var _Verb = ctx.Request.Method;
+      var _Args = ctx.Request.Path.Value.TrimStart('/').Split(new char[] { '/' }, 2);
+      var _Vault = WebDav.Vaults.FirstOrDefault(x => x.Name == (_Args.Length > 0 ? _Args[0] : null));
+      if (_Vault == null)
+      {
+        MainWindow.Log("Unknown Vault", ctx.Request.Path.ToString());
+        ctx.Response.StatusCode = 404;
+        await ctx.Response.WriteAsync("Not Found");
+        return;
+      }
+      _Vault.LastUse = DateTime.Now;
+      var _Path = _Args.Length > 1 ? "/" + _Args[1] : "/";
+      ctx.Items["Vault"] = _Vault;
+      ctx.Items["Path"] = _Path;
+      await next.Invoke(ctx);
+      MainWindow.Log(_Vault.Name, $"{_Verb} {_Path} - {ctx.Response.StatusCode} in {_Timer.Elapsed.TotalMicroseconds}ms");
+    });
     this.Server.MapMethods("/{*route}", ["OPTIONS"], async context => await OnOptions(context));
     this.Server.MapMethods("/{*route}", ["HEAD"], async context => await OnHead(context));
     this.Server.MapMethods("/{*route}", ["GET"], async context => await OnGet(context));
@@ -105,61 +79,74 @@ public class WebDav
   }
   private static async Task OnOptions(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
     pContext.Response.Headers.Allow = "OPTIONS, LOCK, DELETE, PROPPATCH, COPY, MOVE, UNLOCK, PROPFIND";
     pContext.Response.Headers["Dav"] = "1, 2";
     await pContext.Response.WriteAsync("");
-    _Context.Done();
   }
   private static async Task OnHead(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
     pContext.Response.StatusCode = 200;
     await pContext.Response.WriteAsync("");
-    _Context.Done();
   }
   private static async Task OnGet(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
     pContext.Response.Clear();
-    pContext.Response.Headers["Content-Disposition"] = "attachment;filename=" + Path.GetFileName(_Context.Path);
-    pContext.Response.Headers["Content-Length"] = new FileInfo(_Context.Vault.GetFileName(_Context.Path)).Length.ToString();
+    pContext.Response.Headers["Content-Disposition"] = "attachment;filename=" + Path.GetFileName(_Path);
+    pContext.Response.Headers["Content-Length"] = new FileInfo(_Vault.GetFileName(_Path)).Length.ToString();
     pContext.Response.Headers["Content-Transfer-Encoding"] = "binary";
-    ContentType.TryGetValue(Path.GetExtension(_Context.Path), out var t);
+    ContentType.TryGetValue(Path.GetExtension(_Path), out var t);
     pContext.Response.ContentType = t ?? "application/octet-stream";
     pContext.Response.StatusCode = 200;
-    await _Context.Vault.CopyFrom(_Context.Path, pContext.Response.Body);
-    _Context.Done();
+    await _Vault.CopyFrom(_Path, pContext.Response.Body);
   }
   private static async Task OnPut(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    await _Context.Vault.CopyTo(pContext.Request.Body, _Context.Path);
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    await _Vault.CopyTo(pContext.Request.Body, _Path);
     pContext.Response.StatusCode = 201;
     await pContext.Response.WriteAsync("OK");
-    _Context.Done();
   }
   private static async Task OnDelete(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
-    _Context.Vault.Delete(_Context.Path);
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
+    _Vault.Delete(_Path);
     await pContext.Response.WriteAsync("OK");
-    _Context.Done();
   }
   private static async Task OnLock(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
-    if (WebDav.Locks.Contains(_Context.Path))
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
+    if (WebDav.Locks.Contains(_Path))
     {
       // pContext.Response.StatusCode = 423;
       // await pContext.Response.WriteAsync("Already locked");
@@ -167,7 +154,7 @@ public class WebDav
       // return;
     }
     else
-      WebDav.Locks.Add(_Context.Path);
+      WebDav.Locks.Add(_Path);
     string _Body;
     using (var _Reader = new StreamReader(pContext.Request.Body))
       _Body = await _Reader.ReadToEndAsync();
@@ -176,32 +163,34 @@ public class WebDav
     var _Token = (int)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
     pContext.Response.ContentType = "application/xml; charset=utf-8";
     pContext.Response.Headers["Lock-Token"] = "<" + _Token + ">";
-    var _Response = @"<?xml version=""1.0"" encoding=""utf-8""?><D:prop xmlns:D=""DAV:""><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner><D:href>" + _Matches + "</D:href></D:owner><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>" + _Token + "</D:href></D:locktoken><D:lockroot><D:href>" + SanitizeXml(_Context.Path) + "</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>";
+    var _Response = @"<?xml version=""1.0"" encoding=""utf-8""?><D:prop xmlns:D=""DAV:""><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner><D:href>" + _Matches + "</D:href></D:owner><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>" + _Token + "</D:href></D:locktoken><D:lockroot><D:href>" + SanitizeXml(_Path) + "</D:href></D:lockroot></D:activelock></D:lockdiscovery></D:prop>";
     pContext.Response.StatusCode = 200;
     await pContext.Response.WriteAsync(_Response);
-    _Context.Done();
   }
   private static async Task OnUnlock(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
-    if (!WebDav.Locks.Contains(_Context.Path))
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
+    if (!WebDav.Locks.Contains(_Path))
     {
       pContext.Response.StatusCode = 404;
       await pContext.Response.WriteAsync("Not locked");
-      _Context.Done();
       return;
     }
-    WebDav.Locks.Remove(_Context.Path);
+    WebDav.Locks.Remove(_Path);
     pContext.Response.StatusCode = 204;
-    _Context.Done();
   }
   private static async Task OnMkdir(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Vault.CreateDirectory(_Context.Path))
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.CreateDirectory(_Path))
     {
       pContext.Response.StatusCode = 409;
       await pContext.Response.WriteAsync("Exists");
@@ -211,34 +200,42 @@ public class WebDav
       pContext.Response.StatusCode = 201;
       await pContext.Response.WriteAsync("Created");
     }
-    _Context.Done();
   }
   private static async Task OnMove(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
-    var _Target = new Uri(pContext.Request.Headers["Destination"][0]).LocalPath.Substring(_Context.Vault.Name.Length + 1); //Include /Vault portion
-    _Context.Vault.Move(_Context.Path, _Target);
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
+    var _Target = new Uri(pContext.Request.Headers["Destination"][0]).LocalPath.Substring(_Vault.Name.Length + 1); //Include /Vault portion
+    _Vault.Move(_Path, _Target);
     await pContext.Response.WriteAsync("Moved");
-    _Context.Done();
   }
   private static async Task OnFind(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
     var _Deep = pContext.Request.Headers["Depth"] == "1";
     pContext.Response.StatusCode = 200;
     var _Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-    List<string> _Files = [_Context.Path];
+    List<string> _Files = [_Path];
     if (_Deep)
-      _Files.AddRange(_Context.Vault.ScanDir(_Context.Path));
+      _Files.AddRange(_Vault.ScanDir(_Path));
     var _Response = @"<?xml version=""1.0"" encoding=""UTF-8""?><D:multistatus xmlns:D=""DAV:"">";
     foreach (var _File in _Files)
     {
-      if (_Context.Vault.IsHidden(_File)) continue;
-      var _Info = new FileInfo(_Context.Vault.GetFileName(_File));
+      if (_Vault.IsHidden(_File)) continue;
+      var _Info = new FileInfo(_Vault.GetFileName(_File));
       if (_Info.Attributes.HasFlag(FileAttributes.Directory))
       {
         _Response += @$"<D:response><D:href>/{SanitizeXml(_File)}</D:href><D:propstat><D:prop><D:resourcetype><D:collection xmlns:D=""DAV:""/></D:resourcetype><D:displayname>{SanitizeXml(Path.GetFileName(_File))}</D:displayname><D:getlastmodified>{_Info.LastWriteTime.ToString("yyyy-MM-ddTHH:mm:ssK")}</D:getlastmodified><D:supportedlock><D:lockentry xmlns:D=""DAV:""><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockentry></D:supportedlock></D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>";
@@ -251,13 +248,17 @@ public class WebDav
     _Response += "</D:multistatus>";
     pContext.Response.ContentType = "application/xml; charset=utf-8";
     await pContext.Response.WriteAsync(_Response);
-    _Context.Done();
   }
   private static async Task OnPatch(HttpContext pContext)
   {
-    var _Context = new DavContext(pContext);
-    if (!_Context.Valid) return;
-    if (!_Context.Exists) return;
+    var _Vault = pContext.Items["Vault"] as Vault;
+    var _Path = pContext.Items["Path"] as String;
+    if (!_Vault.Exists(_Path))
+    {
+      pContext.Response.StatusCode = 404;
+      await pContext.Response.WriteAsync("Not Found");
+      return;
+    }
     string _Body;
     using (var _Reader = new StreamReader(pContext.Request.Body))
       _Body = await _Reader.ReadToEndAsync();
@@ -268,9 +269,9 @@ public class WebDav
     var _FileAttributes = GetRegexMatch(_Body, @"<Z:Win32FileAttributes>(.*)</Z:Win32FileAttributes>");
 
     pContext.Response.ContentType = "application/xml; charset=utf-8";
-    var _Response = @"<?xml version=""1.0"" encoding=""UTF-8""?><D:multistatus xmlns:D=""DAV:""><D:response><D:href>" + SanitizeXml(_Context.Path) + @"</D:href><D:propstat><D:prop>";
+    var _Response = @"<?xml version=""1.0"" encoding=""UTF-8""?><D:multistatus xmlns:D=""DAV:""><D:response><D:href>" + SanitizeXml(_Path) + @"</D:href><D:propstat><D:prop>";
     var _Patches = "";
-    if (new FileInfo(_Context.Vault.GetFileName(_Context.Path)).Attributes.HasFlag(FileAttributes.Archive))
+    if (new FileInfo(_Vault.GetFileName(_Path)).Attributes.HasFlag(FileAttributes.Archive))
     {
       if (!string.IsNullOrEmpty(_CreationTime))
       {
@@ -292,10 +293,9 @@ public class WebDav
         _Response += @"<Win32FileAttributes xmlns=""urn:schemas-microsoft-com:""></Win32FileAttributes>";
         _Patches += "Attributes,";
       }
-      _Context.Vault.Update(_Context.Path, _CreationTime, _ModifiedTime, _AccessTime);
+      _Vault.Update(_Path, _CreationTime, _ModifiedTime, _AccessTime);
     }
     _Response += @"</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>";
     await pContext.Response.WriteAsync(_Response);
-    _Context.Done();
   }
 }
