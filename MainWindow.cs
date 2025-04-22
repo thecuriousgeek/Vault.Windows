@@ -38,15 +38,14 @@ public class MainWindow : Form
   public void OnMount(object sender, EventArgs args)
   {
     var _Name = (sender is string) ? sender as string : ((ToolStripItem)sender).Tag as string;
-    var _Config = Config.Instances.FirstOrDefault(v => v.Name == _Name);
-    if (_Config == null)
+    if (!Config.Vaults.Contains(_Name))
     {
       MessageBox.Show($"No such vault", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
       return;
     }
     var _Password = WinUtil.InputDialog($"Enter the password for {_Name}");
     if (_Password == null) return;
-    var _Vault = _Config.Open(_Password);
+    var _Vault = Config.Open(_Name,_Password);
     if (_Vault == null)
     {
       MessageBox.Show($"Invalid password", $"Vault {_Name}", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -137,11 +136,11 @@ public class MainWindow : Form
       return;
     }
     Instance.Menu.Items.Clear();
-    foreach (var _Config in Config.Instances)
+    foreach (var _Name in Config.Vaults)
     {
-      ToolStripItem _Item = new ToolStripButton(_Config.Name);
-      _Item.Tag = _Config.Name;
-      var _Mounted = WebDav.Vaults.Any(x => x.Name == _Config.Name);
+      ToolStripItem _Item = new ToolStripButton(_Name);
+      _Item.Tag = _Name;
+      var _Mounted = WebDav.Vaults.Any(x => x.Name == _Name);
       _Item.Image = GetIcon(_Mounted ? "mounted" : "unmounted").ToBitmap();
       _Item.Click += _Mounted ? Instance.OnUnmount : Instance.OnMount;
       Instance.Menu.Items.Add(_Item);

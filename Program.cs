@@ -12,10 +12,10 @@ static class Program
     _MainWindow.Show();
     WebDav.Start();
     Config.Load();
-    foreach (var _Config in Config.Instances)
+    foreach (var _Name in Config.Vaults)
     {
-      if (MessageBox.Show("Do you want to open this vault", _Config.Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) continue;
-      _MainWindow.OnMount(_Config.Name, null);
+      if (MessageBox.Show("Do you want to open this vault", _Name, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) continue;
+      _MainWindow.OnMount(_Name, null);
     }
     MainWindow.UpdateMenu();
     Task.Run(() => Watcher());

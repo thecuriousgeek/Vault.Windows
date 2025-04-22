@@ -3,46 +3,34 @@ using System.Runtime.InteropServices;
 
 public class Config
 {
-  public static List<Config> Instances = new List<Config>();
-  private static String Sign(String pPassword) { return (string.IsNullOrEmpty(pPassword)) ? "vault" : new Crypt.AES(pPassword).Encrypt("vault"); }
+  private static Dictionary<string,string> Instances = new Dictionary<string,string>();
+  public static List<string> Vaults{get{return Instances.Keys.ToList();}}
+  private static string Sign(string pPassword) { return string.IsNullOrEmpty(pPassword) ? "vault" : new Crypt.AES(pPassword).Encrypt("vault"); }
 
   public static void Load()
   {
     foreach (var _Folder in Directory.GetDirectories(Environment.CurrentDirectory))
       if (File.Exists(_Folder + "/.vault"))
       {
-        var _Vault = new Config(Path.GetFileName(_Folder));
-        Config.Instances.Add(_Vault);
+        var _Signature = File.ReadAllText(_Folder + "/.vault");
+        Config.Instances[Path.GetFileName(_Folder)] = _Signature;
       }
   }
-  public static bool Create(String pName, string pPassword)
+  public static bool Create(string pName, string pPassword)
   {
     if (Directory.Exists(pName)) return false;
     Directory.CreateDirectory(pName);
     var _Signature = Config.Sign(pPassword);
     File.WriteAllText(pName + "/.vault", _Signature);
-    var _Vault = new Config(pName);
-    Config.Instances.Add(_Vault);
+    Config.Instances[pName] = _Signature;
     return true;
   }
-  public static Config Get(String pName)
+  public static Vault Open(string pName, string pPassword)
   {
-    var _Vault = Config.Instances.FirstOrDefault(v => v.Name == pName);
+    var _Signature = Config.Instances.FirstOrDefault(x => x.Key == pName).Value;
+    if (_Signature.ToLower() != Sign(pPassword).ToLower()) return null;
+    var _Vault = new Vault(pName, pPassword);
     return _Vault;
-  }
-  public Vault Open(String pPassword)
-  {
-    if (this.Signature.ToLower() != Sign(pPassword).ToLower()) return null;
-    var _Vault = new Vault(this.Name, pPassword);
-    return _Vault;
-  }
-
-  public string Name;
-  public string Signature;
-  public Config(string pName)
-  {
-    this.Name = pName;
-    this.Signature = File.ReadAllText(pName + "/.vault");
   }
 }
 
